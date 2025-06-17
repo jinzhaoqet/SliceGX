@@ -1,0 +1,28 @@
+defaults:
+  - models: gcn
+#  - explainers: gnn_explainer
+#  - explainers: random_explainer
+#  - explainers: pgexplainer
+#  - explainers: subgraphx
+#  - datasets: ba_shapes
+#  - datasets: tree_cycle
+#  - datasets: tree_grid
+#  - datasets: Cora
+#  - datasets: CS
+#  - datasets: products
+#  - datasets: Facebook
+  - override hydra/job_logging: disabled
+  - _self_
+  
+device_id: 0
+random_seed: 3407
+log_path: "log"
+log_level: 20
+console_log: True
+save_plot: True
+record_filename: none
+
+hydra:
+  run:
+    dir: "."
+    

@@ -1,0 +1,10 @@
+dataset_root: 'datasets'
+dataset_name: 'CS'
+random_split_flag: True
+data_split_ratio: [0.8, 0.1, 0.1]
+seed: 2
+num_classes: 2
+K: [2, 4, 6, 8, 10]
+h: [ 0.1,0.2,0.3 ]
+theta: [ 0.1,0.2,0.3 ]
+gamma: 0.5

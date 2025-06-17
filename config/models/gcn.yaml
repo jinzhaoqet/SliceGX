@@ -1,0 +1,28 @@
+gnn_savedir: ''
+gnn_name: 'gcn'
+gnn_saving_dir: ''
+param:
+  ba_shapes:
+    learning_rate: 0.001
+    weight_decay: 5e-4
+    milestones: None
+    gamma: None
+    batch_size: 1
+    num_epochs: 2000
+    num_early_stop: 0
+    gnn_latent_dim:
+      - 20
+      - 20
+      - 20
+    gnn_dropout: 0.0
+    add_self_loop: True
+    gcn_adj_normalization: False
+    gnn_emb_normalization: False
+    graph_classification: False
+    node_classification: True
+    gnn_nonlinear: 'relu'
+    readout: 'identity'
+    fc_latent_dim: [ ]
+    fc_dropout: 0.0
+    fc_nonlinear: 'relu'
+    concate: False

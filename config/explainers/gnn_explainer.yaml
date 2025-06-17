@@ -1,0 +1,8 @@
+explanation_result_dir: ''
+sparsity: 0.5
+param:
+  ba_shapes:
+    lr: 0.01
+    epochs: 100
+    coff_size: 0.1
+    coff_ent: 0.1
