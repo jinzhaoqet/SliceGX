@@ -4,7 +4,10 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="2dfb329c-7041-4d4f-a48c-1956a49bca18" name="Changes" comment="Initial commit" />
+    <list default="true" id="2dfb329c-7041-4d4f-a48c-1956a49bca18" name="Changes" comment="Initial commit">
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Full_version.pdf" beforeDir="false" afterPath="$PROJECT_DIR$/Full_version.pdf" afterDir="false" />
+    </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
@@ -68,6 +71,7 @@
     "Python.visualization.executor": "Run",
     "RunOnceActivity.OpenProjectViewOnStart": "true",
     "RunOnceActivity.ShowReadmeOnStart": "true",
+    "SHARE_PROJECT_CONFIGURATION_FILES": "true",
     "git-widget-placeholder": "main",
     "last_opened_file_path": "/Users/christy277/Downloads/main/SliceGX",
     "node.js.detected.package.eslint": "true",
@@ -245,7 +249,7 @@
       <workItem from="1749024656197" duration="2684000" />
       <workItem from="1750169191414" duration="302000" />
       <workItem from="1750169574008" duration="5835000" />
-      <workItem from="1750176761189" duration="342000" />
+      <workItem from="1750176761189" duration="1844000" />
     </task>
     <task id="LOCAL-00001" summary="Initial commit">
       <option name="closed" value="true" />
