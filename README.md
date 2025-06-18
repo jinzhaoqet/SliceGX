@@ -1,7 +1,7 @@
 ## SliceGX
 This repository contains the source code for our paper: SliceGX: Layer-wise GNN Explanation with Model-slicing.
 
-Full version: [2025ICDE_SliceGX.pdf](https://github.com/TingtingZhu-ZJU/SliceGX/blob/main/Full_version.pdf)
+Full version: [2026ICDE_SliceGX.pdf](https://github.com/TingtingZhu-ZJU/SliceGX/blob/main/Full_version.pdf)
 
 ## Requirements
 - Pytorch 1.10.1
