@@ -4,7 +4,6 @@ This repository contains the source code for our paper: SliceGX: Layer-wise GNN 
 ## Requirements
 - Pytorch 1.10.1
 - PYG 2.1.0
-- matplotlib, scipy, networkx, hydra, numpy ...
 
 ## datasets
 - [Ba-shapes](https://github.com/divelab/DIG_storage/blob/main/xgraph/datasets/BA_shapes.pkl)
