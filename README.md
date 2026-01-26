@@ -72,17 +72,5 @@ This repository contains the source code for our paper: SliceGX: Layer-wise GNN 
 ![result](Figures/result.png)
 
 ## Citation
-If you find this repository useful, please consider citing our paper:
 
-```bibtex
-@inproceedings{yu2026slicegx,
-  title={SliceGX: Layer-wise GNN Explanation with Model-slicing},
-  author={Yu, Cibo and Zhu, Tingting and Chen, Tingyang and Wu, Yinghui and Khan, Arijit and Ke, Xiangyu},
-  booktitle={Proceedings of the ACM Web Conference 2026 (WWW '26)},
-  year={2026},
-  publisher={ACM},
-  location={Dubai, United Arab Emirates},
-  url={[https://doi.org/10.1145/3774904.3792689](https://doi.org/10.1145/3774904.3792689)},
-  doi={10.1145/3774904.3792689},
-  pages={12}
-}
+> Cibo Yu, Tingting Zhu, Tingyang Chen, Yinghui Wu, Arijit Khan, and Xiangyu Ke. 2026. **SliceGX: Layer-wise GNN Explanation with Model-slicing**. In Proceedings of the ACM Web Conference 2026 (WWW ’26), April 13–17, 2026, Dubai, United Arab Emirates. ACM, New York, NY, USA, 12 pages. https://doi.org/10.1145/3774904.3792689
