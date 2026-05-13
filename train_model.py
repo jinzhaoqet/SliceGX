@@ -7,7 +7,10 @@ import torch
 from torch_geometric.data import Data
 from torch_geometric.utils import subgraph
 
+from torch_geometric.loader import NeighborLoader
 from dataset import get_dataset, get_dataloader
+
+NEIGHBOR_LOADER_DATASETS = ['products']
 from gnnNets import get_gnnNets
 
 from utils import check_dirs, set_seed
@@ -50,6 +53,12 @@ class TrainModel(object):
         self.train_mask = train_mask
         self.valid_mask = valid_mask
         self.test_mask = test_mask
+
+        self.use_neighbor_loader = kwargs.get('use_neighbor_loader', False)
+        self.train_loader = kwargs.get('train_loader', None)
+        self.eval_loader  = kwargs.get('eval_loader', None)
+        self.test_loader  = kwargs.get('test_loader', None)
+
         check_dirs(self.save_dir)
 
         if self.graph_classification:
@@ -66,7 +75,7 @@ class TrainModel(object):
             loss = self.__loss__(logits, labels)
         else:
             logits = self.model(x=data.x, edge_index=data.edge_index)
-            if self.dataset_name in ['CS','Physics','Facebook']:
+            if self.dataset_name in ['CS','Physics','Facebook','YelpChi']:
                 loss = self.__loss__(logits[self.train_mask], labels[self.train_mask])
             else:
                 loss = self.__loss__(logits[data.train_mask], labels[data.train_mask])
@@ -107,12 +116,27 @@ class TrainModel(object):
             eval_loss = torch.tensor(losses).mean().item()
             eval_acc = torch.cat(accs, dim=-1).float().mean().item()
         else:
-            data = self.dataset.to(self.device)
-            if self.dataset_name in ['CS','Physics','Facebook']:
-                eval_loss, preds = self._eval_batch(data, data.y, mask=self.valid_mask)
+            if self.use_neighbor_loader:
+                self.model.eval()
+                losses, preds_list, labels_list = [], [], []
+                with torch.no_grad():
+                    for batch in self.eval_loader:
+                        batch = batch.to(self.device)
+                        logits = self.model(x=batch.x, edge_index=batch.edge_index)
+                        n = batch.batch_size
+                        losses.append(self.__loss__(logits[:n], batch.y[:n]).item())
+                        preds_list.append(logits[:n].argmax(-1))
+                        labels_list.append(batch.y[:n])
+                eval_loss = sum(losses) / len(losses)
+                preds = torch.cat(preds_list)
+                eval_acc = (preds == torch.cat(labels_list)).float().mean().item()
             else:
-                eval_loss, preds = self._eval_batch(data, data.y, mask=data.val_mask)
-            eval_acc = (preds == data.y).float().mean().item()
+                data = self.dataset.to(self.device)
+                if self.dataset_name in ['CS','Physics','Facebook','YelpChi']:
+                    eval_loss, preds = self._eval_batch(data, data.y, mask=self.valid_mask)
+                else:
+                    eval_loss, preds = self._eval_batch(data, data.y, mask=data.val_mask)
+                eval_acc = (preds == data.y).float().mean().item()
         return eval_loss, eval_acc
 
     def test(self):
@@ -134,12 +158,27 @@ class TrainModel(object):
             preds = torch.cat(preds, dim=-1)
             test_acc = torch.cat(accs, dim=-1).float().mean().item()
         else:
-            data = self.dataset.to(self.device)
-            if self.dataset_name in ['CS','Physics','Facebook']:
-                test_loss, preds = self._eval_batch(data, data.y, mask=self.test_mask)
+            if self.use_neighbor_loader:
+                self.model.eval()
+                losses, preds_list, labels_list = [], [], []
+                with torch.no_grad():
+                    for batch in self.test_loader:
+                        batch = batch.to(self.device)
+                        logits = self.model(x=batch.x, edge_index=batch.edge_index)
+                        n = batch.batch_size
+                        losses.append(self.__loss__(logits[:n], batch.y[:n]).item())
+                        preds_list.append(logits[:n].argmax(-1))
+                        labels_list.append(batch.y[:n])
+                test_loss = sum(losses) / len(losses)
+                preds = torch.cat(preds_list)
+                test_acc = (preds == torch.cat(labels_list)).float().mean().item()
             else:
-                test_loss, preds = self._eval_batch(data, data.y, mask=data.test_mask)
-            test_acc = (preds == data.y).float().mean().item()
+                data = self.dataset.to(self.device)
+                if self.dataset_name in ['CS','Physics','Facebook','YelpChi']:
+                    test_loss, preds = self._eval_batch(data, data.y, mask=self.test_mask)
+                else:
+                    test_loss, preds = self._eval_batch(data, data.y, mask=data.test_mask)
+                test_acc = (preds == data.y).float().mean().item()
         print(f"Test loss: {test_loss:.4f}, test acc {test_acc:.4f}")
         return test_loss, test_acc, preds
 
@@ -164,7 +203,7 @@ class TrainModel(object):
         self.model.to(self.device)
         best_eval_acc = 0.0
         best_eval_loss = 0.0
-        early_stop_counter = 0
+        early_stop_counter = 10
         for epoch in range(num_epochs):
             is_best = False
             self.model.train()
@@ -176,6 +215,20 @@ class TrainModel(object):
                     losses.append(loss)
                 train_loss = torch.FloatTensor(losses).mean().item()
 
+            elif self.use_neighbor_loader:
+                losses = []
+                for batch in self.train_loader:
+                    batch = batch.to(self.device)
+                    self.model.train()
+                    logits = self.model(x=batch.x, edge_index=batch.edge_index)
+                    n = batch.batch_size
+                    loss = self.__loss__(logits[:n], batch.y[:n])
+                    self.optimizer.zero_grad()
+                    loss.backward()
+                    torch.nn.utils.clip_grad_value_(self.model.parameters(), clip_value=2.0)
+                    self.optimizer.step()
+                    losses.append(loss.item())
+                train_loss = sum(losses) / len(losses)
             else:
                 data = self.dataset.to(self.device)
                 train_loss = self._train_batch(data, data.y)
@@ -226,11 +279,12 @@ class TrainModel(object):
 @hydra.main(version_base=None, config_path="config", config_name="config")
 def main(config):
     config.models.gnn_savedir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "checkpoints")
+    
     config.models.param = config.models.param[config.datasets.dataset_name]
-    device = torch.device('cuda:1' if torch.cuda.is_available() else 'cpu')
+    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
     print(device)
     if config.models.param.graph_classification == False:
-        if config.datasets.dataset_name in ['CS','Physics','Facebook']:
+        if config.datasets.dataset_name in ['CS','Physics','Facebook','YelpChi']:
             dataset, train_mask, valid_mask, test_mask = get_dataset(config.datasets.dataset_root, config.datasets.dataset_name)
         else:
             dataset = get_dataset(config.datasets.dataset_root, config.datasets.dataset_name)
@@ -238,7 +292,7 @@ def main(config):
         num_classes=dataset.num_classes
         dataset = dataset[0]
         dataset.x = dataset.x.float()
-        if config.datasets.dataset_name in ['tree_grid','ba_shapes','Cora','CS','tree_cycle']:
+        if config.datasets.dataset_name in ['tree_grid','ba_shapes','Cora','CS','tree_cycle','YelpChi']:
             pass
         else:
             dataset.y = torch.argmax(dataset.y, dim=1)
@@ -256,7 +310,7 @@ def main(config):
             'lr': config.models.param.learning_rate,
             'weight_decay': config.models.param.weight_decay
         }
-        if config.datasets.dataset_name in ['CS','Physics','Facebook']:
+        if config.datasets.dataset_name in ['CS','Physics','Facebook','YelpChi']:
             trainer = TrainModel(
                 model=gnn_model,
                 dataset_name=config.datasets.dataset_name,
@@ -268,6 +322,34 @@ def main(config):
                 train_mask=train_mask,
                 valid_mask=valid_mask,
                 test_mask=test_mask,
+            )
+        elif config.datasets.dataset_name in NEIGHBOR_LOADER_DATASETS:
+            num_neighbors = list(config.datasets.num_neighbors)
+            nb_batch_size = config.datasets.neighbor_batch_size
+            train_loader = NeighborLoader(
+                dataset, num_neighbors=num_neighbors, batch_size=nb_batch_size,
+                input_nodes=dataset.train_mask, shuffle=True,
+            )
+            eval_loader = NeighborLoader(
+                dataset, num_neighbors=num_neighbors, batch_size=nb_batch_size,
+                input_nodes=dataset.val_mask, shuffle=False,
+            )
+            test_loader = NeighborLoader(
+                dataset, num_neighbors=num_neighbors, batch_size=nb_batch_size,
+                input_nodes=dataset.test_mask, shuffle=False,
+            )
+            trainer = TrainModel(
+                model=gnn_model,
+                dataset_name=config.datasets.dataset_name,
+                dataset=dataset,
+                device=device,
+                graph_classification=config.models.param.graph_classification,
+                save_dir=os.path.join(config.models.gnn_savedir, config.datasets.dataset_name),
+                save_name=f'{config.models.gnn_name}_{len(config.models.param.gnn_latent_dim)}l',
+                use_neighbor_loader=True,
+                train_loader=train_loader,
+                eval_loader=eval_loader,
+                test_loader=test_loader,
             )
         else:
             trainer = TrainModel(

@@ -1,16 +1,16 @@
 defaults:
   - models: gcn
-#  - explainers: gnn_explainer
+  # - explainers: gnn_explainer
 #  - explainers: random_explainer
 #  - explainers: pgexplainer
 #  - explainers: subgraphx
-#  - datasets: ba_shapes
-#  - datasets: tree_cycle
+  # - datasets: ba_shapes
+  - datasets: tree_cycle
 #  - datasets: tree_grid
-#  - datasets: Cora
-#  - datasets: CS
-#  - datasets: products
-#  - datasets: Facebook
+  # - datasets: Cora
+  # - datasets: CS
+  # - datasets: YelpChi
+  # - datasets: products
   - override hydra/job_logging: disabled
   - _self_
   

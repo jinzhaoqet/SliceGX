@@ -1,5 +1,6 @@
 import copy
 import time
+import random
 from collections import defaultdict, deque
 import scipy.sparse as sp
 import torch
@@ -71,7 +72,7 @@ class Slicedmodel:
         return submodel
 
 class Subfunction:
-    def __init__(self, test_indices, dec, modelslice, logger, device):
+    def __init__(self, test_indices, dec, modelslice, logger, device, sample_ratio=1.0):
         self.config = dec.config
         self.test_indices = test_indices
         self.dataset_name = dec.config.datasets.dataset_name
@@ -83,6 +84,7 @@ class Subfunction:
         self.logger = logger
         self.num_hop = modelslice.num_hop
         self.device = device
+        self.sample_ratio = sample_ratio
         self.global_emb, self.logit = self.update_global()
         self.influence_set = self.influence()
         self.diversity_set = self.diversity()
@@ -95,6 +97,9 @@ class Subfunction:
             for j in subset:
                 subset2, _, _, _ = k_hop_subgraph(j, self.num_hop, self.dataset.data.edge_index)
                 subset2 = subset2.cpu().tolist()
+                # Feature 5: 近似采样
+                if self.sample_ratio < 1.0 and len(subset2) > 1:
+                    subset2 = random.sample(subset2, max(1, int(len(subset2) * self.sample_ratio)))
                 for k in subset2:
                     distance = torch.norm(self.global_emb[k].detach() - self.global_emb[j].detach(), p=2).item()
                     if distance <= self.theta:
@@ -143,7 +148,8 @@ class Declarative:
 
 
 class GreedyAlgorithm:
-    def __init__(self, dec, modelslice, node, logger, quality):
+    def __init__(self, dec, modelslice, node, logger, quality,
+                 include_nodes=None, exclude_nodes=None, initial_explanatory=None):
         self.dec = dec
         self.dataset_name = dec.config.datasets.dataset_name
         self.dataset = dec.dataset
@@ -157,7 +163,11 @@ class GreedyAlgorithm:
                         'Fid+': 0, 'Fid-': 0}
         self.influence_set = quality.influence_set
         self.diversity_set = quality.diversity_set
-        self.explanatory = [node]
+        # Feature 1: include/exclude 约束
+        self.include_nodes = include_nodes or []
+        self.exclude_nodes = set(exclude_nodes) if exclude_nodes else set()
+        # Feature 4: 从缓存的中间状态恢复
+        self.explanatory = list(initial_explanatory) if initial_explanatory else [node]
         self.connector = []
         self.global_logits = None
         self.prediction = None
@@ -175,6 +185,10 @@ class GreedyAlgorithm:
         emb_gs, logits_gs = self.model(self.dataset.data.x, self.dataset.data.edge_index[:, []])
         label_gs = logits_gs[self.node].argmax(-1).item()
         self.optimal['factual'] = (label_gs == self.prediction and self.prediction == self.ori_logits[self.node].argmax(-1).item())
+        # Feature 1: 将 include_nodes 中位于 k-hop 邻域内的节点加入解释集
+        for v in self.include_nodes:
+            if v in self.subset and v not in self.explanatory:
+                self.explanatory.append(v)
         self.optimal['score'] = self.evaluate(self.explanatory)
         self.optimal['Fid+'] = 0
         self.optimal['Fid-'] = self.global_logits.softmax(dim=-1)[self.node][self.prediction].item() - \
@@ -192,7 +206,10 @@ class GreedyAlgorithm:
 
     def get_solution(self):
         while len(self.explanatory) < self.K and len(self.explanatory) < len(self.subset):
+            prev_len = len(self.explanatory)
             self.add_new_node()
+            if len(self.explanatory) == prev_len:
+                break  # 没有可添加的候选节点了
         self.verify_connectivity()
         factual, counterfactual, both, sub_score, counter_score = self.verify()
         if factual == True or counterfactual == True:
@@ -236,6 +253,11 @@ class GreedyAlgorithm:
 
     def add_new_node(self):
         left_set = [node for node in self.subset if node not in self.explanatory]
+        # Feature 1: 过滤排除节点
+        if self.exclude_nodes:
+            left_set = [n for n in left_set if n not in self.exclude_nodes]
+        if not left_set:
+            return
         evaluated_scores = list(map(lambda node: (node, self.evaluate(self.explanatory + [node])), left_set))
         sorted_node = sorted(evaluated_scores, key=lambda x: x, reverse=True)
         sorted_node = [node for node, score in sorted_node]
@@ -309,25 +331,36 @@ class GreedyAlgorithm:
         self.update_optimal(factual, counterfactual, both, sub_score, counter_score)
 
 
-def layerwise_run(cut_layer, test_indices, device, logger, dec, state_dict):
+def layerwise_run(cut_layer, test_indices, device, logger, dec, state_dict,
+                  include_nodes=None, exclude_nodes=None,
+                  sample_ratio=1.0, initial_states=None):
     modelslice = Slicedmodel(dec.config, device, len(dec.config.models.param.gnn_latent_dim),
                              len(dec.config.models.param.gnn_latent_dim) - cut_layer, logger,
                              dec.dataset, state_dict)
-    quality = Subfunction(test_indices, dec, modelslice, logger, device)
+    quality = Subfunction(test_indices, dec, modelslice, logger, device,
+                          sample_ratio=sample_ratio)
 
     fidelity = []
     fidelity_inv = []
+    results = []
     for test_node in test_indices:
         logger.info(f'test node: {test_node}')
         dec.dataset.data.to(device)
-        algorithm = GreedyAlgorithm(dec, modelslice, test_node, logger, quality)
+        init_exp = (initial_states or {}).get(test_node)
+        algorithm = GreedyAlgorithm(dec, modelslice, test_node, logger, quality,
+                                    include_nodes=include_nodes,
+                                    exclude_nodes=exclude_nodes,
+                                    initial_explanatory=init_exp)
         optimal = algorithm.get_solution()
         if optimal != None:
             fidelity.append(optimal['Fid+'])
             fidelity_inv.append(optimal['Fid-'])
-    logger.info(f'number: {len(fidelity)}')
-    logger.info(f'Fidelity: {sum(fidelity) / len(fidelity):.4f}\n'
-                f'Fidelity_inv: {sum(fidelity_inv) / len(fidelity_inv): .4f}\n')
+            results.append(optimal)
+    if fidelity:
+        logger.info(f'number: {len(fidelity)}')
+        logger.info(f'Fidelity: {sum(fidelity) / len(fidelity):.4f}\n'
+                    f'Fidelity_inv: {sum(fidelity_inv) / len(fidelity_inv): .4f}\n')
+    return results, quality, modelslice
     
 
 @hydra.main(version_base=None, config_path='config', config_name='config')
@@ -370,15 +403,30 @@ def main(config):
         test_indices = torch.where(dataset.data.test_mask)[0].tolist()
     logger.info(f'test nodes : {test_indices}')
     start_time = time.time()
-    for h_mini in h:
-        for th in theta:
-            for size_run in K:
+    # 只跑最后一层（完整模型）和单组参数
+    h_single = [0.5]
+    theta_single = [0.5]
+    K_single = [100]
+    for h_mini in h_single:
+        for th in theta_single:
+            for size_run in K_single:
                 logger.info(f'h:{h_mini}')
                 logger.info(f'theta: {th}')
                 logger.info(f'size: {size_run}')
-                for i in range(layer_nums - 1, -1, -1):
-                    dec = Declarative(config, dataset, size_run, th, h_mini, gamma)
-                    layerwise_run(i, test_indices, device, logger, dec, state_dict)
+                i = 0  # cut_layer=0 即完整3层模型（最后一层）
+                logger.info(f'layer: {layer_nums - i} (last layer only)')
+                dec = Declarative(config, dataset, size_run, th, h_mini, gamma)
+                layerwise_run(i, test_indices, device, logger, dec, state_dict)
+    # 原始全参数全层扫描（保留）
+    # for h_mini in h:
+    #     for th in theta:
+    #         for size_run in K:
+    #             logger.info(f'h:{h_mini}')
+    #             logger.info(f'theta: {th}')
+    #             logger.info(f'size: {size_run}')
+    #             for i in range(layer_nums - 1, -1, -1):
+    #                 dec = Declarative(config, dataset, size_run, th, h_mini, gamma)
+    #                 layerwise_run(i, test_indices, device, logger, dec, state_dict)
     end_time = time.time()
     logger.info(f'Execution time: {end_time - start_time:.6f}')
 

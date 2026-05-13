@@ -256,7 +256,7 @@ class GreedyAlgorithm:
             removed_set = list(filter(lambda x: x != node_old, sub_nodes))
 
             left_set = [node for node in self.optimal[i]['subset'] if node not in sub_nodes]
-            left_evaluated_scores = list(map(lambda node: (node, self.evaluate(i, self.evaluate(removed_set+[node]), '-')), left_set))
+            left_evaluated_scores = list(map(lambda node: (node, self.evaluate(i, removed_set+[node], '-')), left_set))
             left_sorted_node = sorted(left_evaluated_scores, key=lambda x: x, reverse=True)
             left_sorted_node = [node for node, score in left_sorted_node]
             for each_node in left_sorted_node:
@@ -454,7 +454,7 @@ def main(config):
     )
     logger = get_logger(config.log_path, log_file, config.console_log, config.log_level)
     logger.info(OmegaConf.to_yaml(config))
-    device = 'cuda:1' if torch.cuda.is_available() else 'cpu'
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
     logger.info(f'Using device: {device}')
     logger.info(f'Using data: {dataset.data}')
 
@@ -464,8 +464,10 @@ def main(config):
                                          f'{config.models.gnn_name}_'
                                          f'{len(config.models.param.gnn_latent_dim)}l_best.pth'))['net']
 
-    test_indices = config.datasets.test_indices
-    # test_indices = torch.where(dataset.data.test_mask)[0].tolist()
+    if config.datasets.dataset_name in ['tree_grid', 'tree_cycle']:
+        test_indices = torch.where(dataset[0].test_mask * dataset[0].y != 0)[0].tolist()
+    else:
+        test_indices = torch.where(dataset.data.test_mask)[0].tolist()
     logger.info(f'test nodes : {test_indices}')
     for h_mini in h:
         for th in theta:
@@ -473,10 +475,14 @@ def main(config):
                 logger.info(f'h:{h_mini}')
                 logger.info(f'theta: {th}')
                 logger.info(f'size: {size_run}')
+                # 只跑最后一层验证
+                i = 0  # cut_layer=0 → num_hop=layer_nums (完整模型)
+                dec=Declarative(config,dataset,size_run,th,h_mini,gamma)
+                layerwise_run(i, test_indices, device, logger, dec, state_dict)
+                # 原始全层扫描（保留）
                 # for i in range(layer_nums - 1, -1, -1):
-                for i in [0,1,2]:
-                    dec=Declarative(config,dataset,size_run,th,h_mini,gamma)
-                    layerwise_run(i, test_indices, device, logger, dec, state_dict)
+                #     dec=Declarative(config,dataset,size_run,th,h_mini,gamma)
+                #     layerwise_run(i, test_indices, device, logger, dec, state_dict)
 
 
 if __name__ == '__main__':

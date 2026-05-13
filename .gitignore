@@ -1,0 +1,12 @@
+# 缓存与编译文件
+__pycache__/
+*.py[cod]
+.hydra/
+
+# 实验数据与日志
+log/
+datasets/
+checkpoints/
+
+# 操作系统文件
+.DS_Store

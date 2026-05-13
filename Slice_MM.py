@@ -275,7 +275,7 @@ class GreedyAlgorithm:
             removed_set = list(filter(lambda x: x != node_old, sub_nodes))
 
             left_set = [node for node in self.optimal[layer][i]['subset'] if node not in sub_nodes]
-            left_evaluated_scores = list(map(lambda node: (node, self.evaluate(i, self.evaluate(removed_set+[node]), '-')), left_set))
+            left_evaluated_scores = list(map(lambda node: (node, self.evaluate(i, removed_set+[node], '-', layer)), left_set))
             left_sorted_node = sorted(left_evaluated_scores, key=lambda x: x, reverse=True)
             left_sorted_node = [node for node, score in left_sorted_node]
             for each_node in left_sorted_node:
@@ -423,34 +423,80 @@ class GreedyAlgorithm:
                 self.get_solution(i)
         return self.optimal
 
-def layerwise_run(layer_nums, test_indices, device,logger, dec,state_dict):
-    modelslice=Slicedmodel(dec.config, device,layer_nums,logger,dec.dataset, state_dict)
-    quality = Subfunction(test_indices, dec, modelslice, logger, device)
-    quality_file=os.path.join('Greedy',dec.config.datasets.dataset_name,'quality')
-    check_dirs(quality_file)
-    torch.save(quality, os.path.join(quality_file, f'quality.pt'))
+def layerwise_run(layer_nums, test_indices, device, logger, dec, state_dict):
+    """逐层按需计算 + hop jumping 传递上层解
+
+    与原版的区别：
+    - 原版: Subfunction 一次性为所有层预计算 influence/diversity (慢)
+    - 新版: 每层独立创建 Slicedmodel + Subfunction (像 SS/MS), 但用上层解做种子
+    """
+    from Slice_MS import (GreedyAlgorithm as GreedyMS,
+                          Subfunction as SubMS,
+                          Slicedmodel as SliceMS_Single)
 
     start_time = time.time()
-    # dec.dataset.data.to(device)
-    # algorithm = GreedyAlgorithm(dec, modelslice, test_indices, logger, quality)
-    # optimal = algorithm.get_all_solution()
-    # print(optimal)
-    # for i in range(modelslice.num_hop):
-    #     fidelity = []
-    #     fidelity_inv = []
-    #     for j in range(len(test_indices)):
-    #         fidelity.append(optimal[i][j]['Fid+'])
-    #         fidelity_inv.append(optimal[i][j]['Fid-'])
-    #     logger.info(f'Fidelity: {sum(fidelity) / len(fidelity):.4f}\n'f'Fidelity_inv: {sum(fidelity_inv) / len(fidelity_inv): .4f}')
-    # end_time = time.time()
-    # logger.info(f'Execution time: {end_time - start_time:.6f}')
+    dec.dataset.data.to(device)
+
+    prev_layer_solutions = None  # 上一层每个节点的解释子图
+
+    # 从最深层到最浅层
+    for cut_layer in range(layer_nums):
+        num_hop = layer_nums - cut_layer
+        logger.info(f'=== Layer {num_hop} (cut_layer={cut_layer}) ===')
+
+        # 逐层创建模型和 Subfunction (像 SS/MS，不全量预计算)
+        modelslice = SliceMS_Single(dec.config, device, num_hop,
+                                    logger, dec.dataset, state_dict)
+        quality = SubMS(test_indices, dec, modelslice, logger, device)
+
+        # 创建贪心算法实例
+        algorithm = GreedyMS(dec, modelslice, test_indices, logger, quality)
+
+        # === Hop Jumping: 用上层解初始化当前层 ===
+        if prev_layer_solutions is not None:
+            for j, vt in enumerate(test_indices):
+                # 当前层的 k-hop 邻域
+                cur_subset = algorithm.optimal[j]['subset']
+                # 上层解 ∩ 当前层邻域 = 当前层的初始解
+                inherited = list(set(prev_layer_solutions[j]) & set(cur_subset))
+                if inherited:
+                    algorithm.optimal[j]['nodes'] = inherited
+                    # 更新已选节点的 influence/diversity 状态
+                    for node in inherited:
+                        if vt in quality.influence_set and node in quality.influence_set[vt]:
+                            algorithm.optimal[j]['current_influence'].update(
+                                quality.influence_set[vt][node])
+                        if vt in quality.diversity_set and node in quality.diversity_set[vt]:
+                            algorithm.optimal[j]['current_diversity'].update(
+                                quality.diversity_set[vt][node])
+                    algorithm.optimal[j]['score'] = algorithm.evaluate(j, [-1], 'None')
+                    if len(inherited) >= dec.K or len(inherited) >= len(cur_subset):
+                        algorithm.optimal[j]['Fill'] = True
+            logger.info(f'  Hop jumping: inherited solutions from layer {num_hop+1}')
+
+        # 运行贪心
+        optimal = algorithm.get_solution()
+
+        # 保存当前层的解，供下一层 hop jumping
+        prev_layer_solutions = {}
+        for j, vt in enumerate(test_indices):
+            prev_layer_solutions[j] = list(optimal[j].get('nodes', [vt]))
+
+        # 输出当前层指标
+        fidelity = [opt['Fid+'] for opt in optimal]
+        fidelity_inv = [opt['Fid-'] for opt in optimal]
+        logger.info(f'  Layer {num_hop} Fidelity: {sum(fidelity)/len(fidelity):.4f}  '
+                    f'Fidelity_inv: {sum(fidelity_inv)/len(fidelity_inv):.4f}')
+
+    end_time = time.time()
+    logger.info(f'Total execution time: {end_time - start_time:.6f}')
 
 
 
 
 @hydra.main(version_base=None, config_path='config', config_name='config')
 def main(config):
-    K = [10]
+    K = [6]
     h=[0.3]
     theta=[0.2]
     gamma=0.5
@@ -485,7 +531,7 @@ def main(config):
     )
     logger = get_logger(config.log_path, log_file, config.console_log, config.log_level)
     logger.info(OmegaConf.to_yaml(config))
-    device = 'cuda:1' if torch.cuda.is_available() else 'cpu'
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
     logger.info(f'Using device: {device}')
     logger.info(f'Using data: {dataset.data}')
 
@@ -495,8 +541,11 @@ def main(config):
                                          f'{config.models.gnn_name}_'
                                          f'{len(config.models.param.gnn_latent_dim)}l_best.pth'))['net']
 
-    # test_indices = config.datasets.test_indices
-    test_indices = torch.where(dataset.data.test_mask)[0].tolist()
+    if config.datasets.dataset_name in ['tree_grid', 'tree_cycle']:
+        test_indices = torch.where(dataset[0].test_mask * dataset[0].y != 0)[0].tolist()
+    else:
+        test_indices = torch.where(dataset.data.test_mask)[0].tolist()
+    # test_indices = test_indices[:2]  # 限制测试节点数量以加速验证
     logger.info(f'test nodes : {test_indices}')
     for h_mini in h:
         for th in theta:
