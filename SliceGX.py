@@ -95,6 +95,8 @@ class Subfunction:
             subset, _, _, _ = k_hop_subgraph(i, self.num_hop, self.dataset.data.edge_index)
             subset = subset.cpu().tolist()
             for j in subset:
+                # Ensure every candidate node has an initialized diversity bucket.
+                diversity_set[i][j].add(j)
                 subset2, _, _, _ = k_hop_subgraph(j, self.num_hop, self.dataset.data.edge_index)
                 subset2 = subset2.cpu().tolist()
                 # Feature 5: 近似采样
@@ -173,8 +175,8 @@ class GreedyAlgorithm:
         self.prediction = None
         self.subset = None
         self.ori_logits = None
-        self.initial_status()
         self.logger = logger
+        self.initial_status()
 
     def initial_status(self):
         self.subset, edge_index, _, _ = k_hop_subgraph(self.node, self.num_hop, self.dataset.data.edge_index)
@@ -198,8 +200,8 @@ class GreedyAlgorithm:
         all_influence = set()
         all_diversity = set()
         for v in nodeset:
-            all_influence.update(self.influence_set[self.node][v])
-            all_diversity.update(self.diversity_set[self.node][v])
+            all_influence.update(self.influence_set.get(self.node, {}).get(v, []))
+            all_diversity.update(self.diversity_set.get(self.node, {}).get(v, []))
         f1=len(all_influence)
         f2=len(all_diversity)
         return self.dec.gamma*f1+(1-self.dec.gamma)*f2
@@ -216,7 +218,7 @@ class GreedyAlgorithm:
             self.update_optimal(factual, counterfactual, both, sub_score, counter_score)
         else:
             self.postprocessing()
-        print(self.optimal)
+        self.logger.debug(f'optimal={self.optimal}')
         return self.optimal
 
     def update_optimal(self, factual, counterfactual, both, sub_score, counter_score):
@@ -273,7 +275,8 @@ class GreedyAlgorithm:
         subgraph = G.subgraph(self.explanatory)
         if nx.is_connected(subgraph) == False:
             self.bfs_connect_disconnected_nodes(G, subgraph)
-        print(nx.is_connected(G.subgraph(list(set(self.explanatory) | set(self.connector)))))
+        is_connected = nx.is_connected(G.subgraph(list(set(self.explanatory) | set(self.connector))))
+        self.logger.debug(f'connected_after_repair={is_connected}')
 
     def bfs_connect_disconnected_nodes(self, graph, subgraph):
         disconnected_nodes = [node for node in self.explanatory if not nx.has_path(subgraph, self.node, node)]
@@ -287,8 +290,9 @@ class GreedyAlgorithm:
         return shortest_paths
 
     def postprocessing(self):
-        print("postprocessing")
-        print(self.explanatory, self.connector, self.subset)
+        self.logger.debug(
+            f'postprocessing explanatory={self.explanatory} connector={self.connector} subset={self.subset}'
+        )
         sub_nodes = list(set(self.explanatory) | set(self.connector))
         sub_evaluated_scores = list(
             map(lambda node: (node, self.evaluate(list(filter(lambda x: x != node, sub_nodes)))), sub_nodes))
@@ -314,7 +318,9 @@ class GreedyAlgorithm:
                     # copy the ori result
                     ori_explanatory_set = copy.deepcopy(self.explanatory)
                     ori_connector = copy.deepcopy(self.connector)
-                    print(node_old, self.explanatory, self.connector)
+                    self.logger.debug(
+                        f'trying replacement node_old={node_old} explanatory={self.explanatory} connector={self.connector}'
+                    )
                     if node_old in self.explanatory:
                         self.explanatory.remove(node_old)
                         self.explanatory.append(each_node)

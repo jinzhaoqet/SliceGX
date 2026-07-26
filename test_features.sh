@@ -1,9 +1,6 @@
 #!/bin/bash
 # SliceGX 声明式语言 — 五大 Feature 测试脚本
-# 用法: cd /root/SliceGX && bash test_features.sh
-
-source /root/autodl-tmp/myenv/bin/activate
-export LD_LIBRARY_PATH=/root/autodl-tmp/myenv/lib:$LD_LIBRARY_PATH
+# 用法: cd /path/to/SliceGX && bash test_features.sh
 
 SEP="============================================================"
 
@@ -16,7 +13,18 @@ run_query() {
     echo "Query: $query"
     echo "$SEP"
     printf '%s\nexit\n' "$query" | python slicegx_lang.py 2>&1 \
-        | grep -E '(=== |Algorithm|Results:|Time:|Cache:|Comparison|Best|Common|support|node=|\[0\]|\[1\]|\[2\]|Router|Resuming)'
+        | grep -E '(=== |Algorithm|Plan:|Logical:|Results:|Time:|Planning Time:|Cache:|Comparison|Best|Common|support|node=|\[0\]|\[1\]|\[2\]|Stored result as|Q[0-9]|Reasons:)'
+}
+
+run_session() {
+    local label="$1"
+    local block="$2"
+    echo ""
+    echo "$SEP"
+    echo "[$label]"
+    echo "$SEP"
+    printf '%s\nexit\n' "$block" | python slicegx_lang.py 2>&1 \
+        | grep -E '(=== |Algorithm|Plan:|Logical:|Results:|Time:|Planning Time:|Cache:|Comparison|Best|Common|support|node=|\[0\]|\[1\]|\[2\]|Stored result as|Q[0-9]|Reasons:|\[")'
 }
 
 echo "SliceGX Declarative Language — Feature Test Suite"
@@ -35,8 +43,8 @@ run_query "Feature 1c: EXCLUDE 8,517 — 排除节点" \
 
 # ====== Feature 2: 结果对比 ======
 
-run_query "Feature 2a: COMPARE BY FIDELITY_PLUS" \
-    "EXPLAIN ALL WHERE FACTUAL = TRUE COMPARE BY FIDELITY_PLUS"
+run_query "Feature 2a: RANK BY FIDELITY_PLUS" \
+    "EXPLAIN ALL WHERE FACTUAL = TRUE RANK BY FIDELITY_PLUS"
 
 run_query "Feature 2b: COMPARE BY COMMON_NODES" \
     "EXPLAIN ALL COMPARE BY COMMON_NODES"
@@ -65,6 +73,14 @@ printf 'EXPLAIN NODE 519 WITH K 4\nEXPLAIN NODE 519 WITH K 6\nexit\n' \
 
 run_query "Feature 5: 近似采样 30%" \
     "EXPLAIN NODE 556 WITH APPROXIMATE 0.3"
+
+# ====== Feature 6: Compositional Queries ======
+
+run_session "Feature 6a: LET + COMPARE" \
+    $'LET Q = EXPLAIN ALL NODE\nCOMPARE Q BY COMMON_NODES\nlist'
+
+run_session "Feature 6b: FILTER + RANK + LET chaining" \
+    $'LET Q1 = EXPLAIN ALL NODE\nLET Q2 = FILTER Q1 WHERE FIDELITY_PLUS > 0.7\nRANK Q2 BY FIDELITY_PLUS'
 
 echo ""
 echo "$SEP"

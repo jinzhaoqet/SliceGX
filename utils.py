@@ -25,7 +25,6 @@ def set_seed(seed):
 
 
 def check_dirs(save_dirs):
-    print(save_dirs)
     if save_dirs:
         if os.path.isdir(save_dirs):
             pass
@@ -326,5 +325,4 @@ class PlotUtils(object):
                            labels={n: n for n in G.nodes},
                            figname=None,
                            )
-
 

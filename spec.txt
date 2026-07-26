@@ -1,0 +1,44 @@
+# This file may be used to create an environment using:
+# $ conda create --name <env> --file <this file>
+# platform: linux-64
+# created-by: conda 25.1.1
+@EXPLICIT
+https://repo.anaconda.com/pkgs/main/linux-64/_libgcc_mutex-0.1-main.conda
+https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/conda-forge/noarch/ca-certificates-2025.8.3-hbd8a1cb_0.conda
+https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/conda-forge/noarch/kernel-headers_linux-64-3.10.0-he073ed8_18.conda
+https://repo.anaconda.com/pkgs/main/linux-64/ld_impl_linux-64-2.40-h12ee557_0.conda
+https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/main/linux-64/libgcc-devel_linux-64-11.2.0-h1234567_1.conda
+https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/main/linux-64/libstdcxx-devel_linux-64-11.2.0-h1234567_1.conda
+https://repo.anaconda.com/pkgs/main/linux-64/libstdcxx-ng-11.2.0-h1234567_1.conda
+https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/conda-forge/noarch/tzdata-2025b-h78e105d_0.conda
+https://repo.anaconda.com/pkgs/main/linux-64/libgomp-11.2.0-h1234567_1.conda
+https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/conda-forge/noarch/sysroot_linux-64-2.17-h0157908_18.conda
+https://repo.anaconda.com/pkgs/main/linux-64/_openmp_mutex-5.1-1_gnu.conda
+https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/main/linux-64/binutils_impl_linux-64-2.40-h5293946_0.conda
+https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/main/linux-64/binutils_linux-64-2.40.0-hc2dff05_2.conda
+https://repo.anaconda.com/pkgs/main/linux-64/libgcc-ng-11.2.0-h1234567_1.conda
+https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/main/linux-64/gcc_impl_linux-64-11.2.0-h1234567_1.conda
+https://repo.anaconda.com/pkgs/main/linux-64/libffi-3.4.4-h6a678d5_1.conda
+https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/conda-forge/linux-64/libxcrypt-4.4.28-h166bdaf_0.tar.bz2
+https://repo.anaconda.com/pkgs/main/linux-64/ncurses-6.5-h7934f7d_0.conda
+https://repo.anaconda.com/pkgs/main/linux-64/openssl-3.0.17-h5eee18b_0.conda
+https://repo.anaconda.com/pkgs/main/linux-64/pthread-stubs-0.3-h0ce48e5_1.conda
+https://repo.anaconda.com/pkgs/main/linux-64/xorg-libxau-1.0.12-h9b100fa_0.conda
+https://repo.anaconda.com/pkgs/main/linux-64/xorg-libxdmcp-1.1.5-h9b100fa_0.conda
+https://repo.anaconda.com/pkgs/main/linux-64/xorg-xorgproto-2024.1-h5eee18b_1.conda
+https://repo.anaconda.com/pkgs/main/linux-64/xz-5.6.4-h5eee18b_1.conda
+https://repo.anaconda.com/pkgs/main/linux-64/zlib-1.2.13-h5eee18b_1.conda
+https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/main/linux-64/gcc_linux-64-11.2.0-h5c386dc_2.conda
+https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/main/linux-64/gxx_impl_linux-64-11.2.0-h1234567_1.conda
+https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/conda-forge/linux-64/libpng-1.6.37-h21135ba_2.tar.bz2
+https://repo.anaconda.com/pkgs/main/linux-64/libxcb-1.17.0-h9b100fa_0.conda
+https://repo.anaconda.com/pkgs/main/linux-64/readline-8.3-hc2a1206_0.conda
+https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/conda-forge/linux-64/freetype-2.10.4-h0708190_1.tar.bz2
+https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/main/linux-64/gxx_linux-64-11.2.0-hc2dff05_2.conda
+https://repo.anaconda.com/pkgs/main/linux-64/sqlite-3.50.2-hb25bd0a_1.conda
+https://repo.anaconda.com/pkgs/main/linux-64/xorg-libx11-1.8.12-h9b100fa_1.conda
+https://repo.anaconda.com/pkgs/main/linux-64/tk-8.6.15-h54e0aa7_0.conda
+https://repo.anaconda.com/pkgs/main/linux-64/python-3.8.20-he870216_0.conda
+https://repo.anaconda.com/pkgs/main/linux-64/setuptools-75.1.0-py38h06a4308_0.conda
+https://repo.anaconda.com/pkgs/main/linux-64/wheel-0.44.0-py38h06a4308_0.conda
+https://repo.anaconda.com/pkgs/main/linux-64/pip-24.2-py38h06a4308_0.conda
