@@ -1,7 +1,7 @@
 import unittest
 
-from query_executor import SliceGXExecutor
 from query_session import QuerySessionStore
+from result_operations import ResultOperations
 from result_schema import ExplanationResult, QueryExecutionResult
 
 
@@ -33,7 +33,7 @@ class CompareSavedResultTest(unittest.TestCase):
                 ExplanationResult(node_id=2, nodes=[2, 3, 4], factual=True),
             ],
         )
-        compared = SliceGXExecutor.compare_saved_result(saved, "common_nodes", "Q1")
+        compared = ResultOperations.compare(saved, "common_nodes", "Q1")
         self.assertIsNotNone(compared.comparison)
         payload = compared.comparison.to_dict()
         self.assertEqual(payload["type"], "common_nodes")
@@ -58,7 +58,7 @@ class CompareSavedResultTest(unittest.TestCase):
             fid_plus_threshold = None
             fid_minus_threshold = None
 
-        filtered = SliceGXExecutor.filter_saved_result(saved, FilterQuery(), "Q1")
+        filtered = ResultOperations.filter(saved, FilterQuery(), "Q1")
         self.assertEqual(filtered.filtered_results, 1)
         self.assertEqual(filtered.results[0].node_id, 1)
 
@@ -74,7 +74,7 @@ class CompareSavedResultTest(unittest.TestCase):
                 ExplanationResult(node_id=3, nodes=[3], fidelity_plus=0.5),
             ],
         )
-        ranked = SliceGXExecutor.rank_saved_result(saved, "fidelity_plus", "Q1")
+        ranked = ResultOperations.rank(saved, "fidelity_plus", "Q1")
         self.assertEqual([item.node_id for item in ranked.results], [2, 3, 1])
 
 

@@ -1,5 +1,7 @@
 # SliceGX 查询语义说明
 
+> 当前 TKDE 扩展后的正式数据模型、typed result algebra 和执行语义以 [TKDE扩展统一设计与实现.md](/home/ycb/SliceGX/docs/TKDE扩展统一设计与实现.md:1) 为准。本文档保留早期核心查询语义。
+
 ## 1. 文档目标
 
 本文档定义 SliceGX 声明式查询语言的语义层含义，也就是：

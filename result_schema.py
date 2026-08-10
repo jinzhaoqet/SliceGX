@@ -113,6 +113,8 @@ class QueryExecutionResult:
     cache_stats: Dict[str, Any] = field(default_factory=dict)
     error: Optional[ErrorSummary] = None
     plan_only: bool = False
+    analytics: Dict[str, Any] = field(default_factory=dict)
+    materialized_as: Optional[str] = None
 
     def __post_init__(self):
         if isinstance(self.plan, dict):
@@ -135,4 +137,6 @@ class QueryExecutionResult:
             "cache_stats": dict(self.cache_stats),
             "error": self.error.to_dict() if self.error else None,
             "plan_only": self.plan_only,
+            "analytics": dict(self.analytics),
+            "materialized_as": self.materialized_as,
         }

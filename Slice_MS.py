@@ -1,4 +1,5 @@
 import copy
+import random
 import time
 import logging
 from collections import defaultdict, deque
@@ -74,7 +75,7 @@ class Slicedmodel:
         submodel.to(self.device)
         return submodel
 class Subfunction:
-    def __init__(self, test_indices, dec, modelslice, logger, device):
+    def __init__(self, test_indices, dec, modelslice, logger, device, sample_ratio=1.0):
         self.config = dec.config
         self.test_indices=test_indices
         self.dataset_name = dec.config.datasets.dataset_name
@@ -86,6 +87,7 @@ class Subfunction:
         self.logger=logger
         self.num_hop=modelslice.num_hop
         self.device = device
+        self.sample_ratio = sample_ratio
         self.global_emb, self.logit = self.update_global()
         self.influence_set=self.influence()
         self.diversity_set=self.diversity()
@@ -98,6 +100,8 @@ class Subfunction:
             for j in subset:
                 subset2, _, _, _ = k_hop_subgraph(j, self.num_hop, self.dataset.data.edge_index)
                 subset2 = subset2.cpu().tolist()
+                if self.sample_ratio < 1.0 and len(subset2) > 1:
+                    subset2 = random.sample(subset2, max(1, int(len(subset2) * self.sample_ratio)))
                 for k in subset2:
                     distance = torch.norm(self.global_emb[k].detach() - self.global_emb[j].detach(), p=2).item()
                     if distance <= self.theta:
@@ -490,4 +494,3 @@ if __name__ == '__main__':
     simplefilter(action="ignore", category=FutureWarning)
     sys.argv.append(f"models.gnn_savedir={os.path.join(os.path.dirname(__file__), 'checkpoints')}")
     main()
-

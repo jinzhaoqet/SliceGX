@@ -1,5 +1,7 @@
 # SliceGX 查询语言规范
 
+> 当前 TKDE 扩展后的统一语法、结果代数、优化器、benchmark 和 LLM 实现以 [TKDE扩展统一设计与实现.md](/home/ycb/SliceGX/docs/TKDE扩展统一设计与实现.md:1) 为准。本文档保留早期核心语法说明。
+
 ## 1. 目标
 
 本文档定义 SliceGX 声明式查询语言的表层语法，用于统一：

@@ -26,9 +26,16 @@ class ExplainQuery:
 
     compare_by: Optional[str] = None  # 'fidelity_plus' | 'common_nodes'
     rank_by: Optional[str] = None  # 'fidelity_plus'
+    project_fields: List[str] = field(default_factory=list)
+    group_by: Optional[str] = None
+    pattern_min_support: Optional[float] = None
+    materialize_as: Optional[str] = None
 
     approximate: bool = False
     sample_ratio: float = 0.3
+    max_error: Optional[float] = None
+    min_confidence: Optional[float] = None
+    time_budget_seconds: Optional[float] = None
 
     algorithm: Optional[str] = None  # 'SS' | 'MS' | 'MM'
     plan_only: bool = False
@@ -39,11 +46,15 @@ class QueryParser:
 
     def parse(self, query_str: str) -> ExplainQuery:
         stripped = query_str.strip()
+        if not stripped:
+            raise ValueError("Query cannot be empty.")
         plan_only = False
         upper = stripped.upper()
         if upper.startswith('EXPLAIN PLAN FOR '):
             stripped = stripped[len('EXPLAIN PLAN FOR '):]
             plan_only = True
+        if not stripped.upper().startswith('EXPLAIN '):
+            raise ValueError("A SliceGX query must start with EXPLAIN.")
 
         q = ExplainQuery()
         q.plan_only = plan_only
@@ -75,24 +86,40 @@ class QueryParser:
                     q.target = 'node'
                     q.node_ids = [int(next_tok)]
 
-            elif tok == 'WHERE' and i + 1 < n:
+            elif tok in ('WHERE', 'AND') and i + 1 < n:
                 i += 1
                 cond = tokens[i].upper()
                 if cond == 'FACTUAL' and i + 2 < n:
+                    if tokens[i + 1] != '=':
+                        raise ValueError("FACTUAL only supports the = comparator.")
                     i += 2
+                    if tokens[i].upper() not in ('TRUE', 'FALSE'):
+                        raise ValueError("FACTUAL value must be TRUE or FALSE.")
                     q.require_factual = tokens[i].upper() == 'TRUE'
                 elif cond == 'COUNTERFACTUAL' and i + 2 < n:
+                    if tokens[i + 1] != '=':
+                        raise ValueError("COUNTERFACTUAL only supports the = comparator.")
                     i += 2
+                    if tokens[i].upper() not in ('TRUE', 'FALSE'):
+                        raise ValueError("COUNTERFACTUAL value must be TRUE or FALSE.")
                     q.require_counterfactual = tokens[i].upper() == 'TRUE'
                 elif cond == 'FIDELITY_PLUS' and i + 2 < n:
+                    if tokens[i + 1] != '>':
+                        raise ValueError("FIDELITY_PLUS only supports the > comparator.")
                     i += 2
                     q.fid_plus_threshold = float(tokens[i])
                 elif cond == 'FIDELITY_MINUS' and i + 2 < n:
+                    if tokens[i + 1] != '<':
+                        raise ValueError("FIDELITY_MINUS only supports the < comparator.")
                     i += 2
                     q.fid_minus_threshold = float(tokens[i])
                 elif cond == 'SUBGRAPH_SIZE' and i + 2 < n:
+                    if tokens[i + 1] != '<=':
+                        raise ValueError("SUBGRAPH_SIZE only supports the <= comparator.")
                     i += 2
                     q.max_subgraph_size = int(tokens[i])
+                else:
+                    raise ValueError(f"Unsupported or incomplete WHERE predicate: {cond}")
 
             elif tok == 'AT' and i + 1 < n:
                 i += 1
@@ -127,6 +154,22 @@ class QueryParser:
                     i += 1
                     q.rank_by = tokens[i].lower()
 
+            elif tok == 'PROJECT' and i + 1 < n:
+                i += 1
+                q.project_fields = [field_name.strip().lower() for field_name in tokens[i].split(',')]
+
+            elif tok == 'GROUP' and i + 2 < n and tokens[i + 1].upper() == 'BY':
+                i += 2
+                q.group_by = tokens[i].lower()
+
+            elif tok == 'PATTERN' and i + 2 < n and tokens[i + 1].upper() == 'MIN_SUPPORT':
+                i += 2
+                q.pattern_min_support = float(tokens[i])
+
+            elif tok == 'MATERIALIZE' and i + 2 < n and tokens[i + 1].upper() == 'AS':
+                i += 2
+                q.materialize_as = tokens[i]
+
             elif tok == 'WITH' and i + 1 < n:
                 i += 1
                 param = tokens[i].upper()
@@ -150,6 +193,22 @@ class QueryParser:
                 elif param == 'GAMMA' and i + 1 < n:
                     i += 1
                     q.gamma = float(tokens[i])
+                elif param == 'MAX_ERROR' and i + 1 < n:
+                    i += 1
+                    q.max_error = float(tokens[i])
+                    q.approximate = True
+                elif param == 'MIN_CONFIDENCE' and i + 1 < n:
+                    i += 1
+                    q.min_confidence = float(tokens[i])
+                    q.approximate = True
+                elif param == 'TIME_BUDGET' and i + 1 < n:
+                    i += 1
+                    q.time_budget_seconds = float(tokens[i])
+                else:
+                    raise ValueError(f"Unsupported or incomplete WITH parameter: {param}")
+
+            else:
+                raise ValueError(f"Unexpected token at position {i}: {tokens[i]}")
 
             i += 1
 

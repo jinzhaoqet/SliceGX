@@ -1,5 +1,9 @@
 from dataclasses import dataclass, field
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
+
+from planner.cost_model import CandidatePlan, ExplanationCostModel
+from planner.quality import ApproximationQualityProfile
+from planner.rewrites import LogicalRewriter
 
 
 @dataclass
@@ -9,6 +13,8 @@ class LogicalPlan:
     compare_op: str = "none"
     layer_scope: str = "single_layer"
     approximate: bool = False
+    operators: List[str] = field(default_factory=list)
+    rewrite_rules: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -17,6 +23,8 @@ class LogicalPlan:
             "compare_op": self.compare_op,
             "layer_scope": self.layer_scope,
             "approximate": self.approximate,
+            "operators": list(self.operators),
+            "rewrite_rules": list(self.rewrite_rules),
         }
 
 
@@ -28,6 +36,10 @@ class PhysicalPlan:
     sample_ratio: float
     estimated_cost: float
     reasons: List[str] = field(default_factory=list)
+    shared_scope: str = "none"
+    incremental: bool = False
+    quality: Dict[str, Any] = field(default_factory=dict)
+    candidates: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -37,6 +49,10 @@ class PhysicalPlan:
             "sample_ratio": self.sample_ratio,
             "estimated_cost": self.estimated_cost,
             "reasons": list(self.reasons),
+            "shared_scope": self.shared_scope,
+            "incremental": self.incremental,
+            "quality": dict(self.quality),
+            "candidates": list(self.candidates),
         }
 
 
@@ -55,111 +71,197 @@ class QueryPlan:
 
 
 class QueryOptimizer:
-    """A lightweight rule-based optimizer for SliceGX explanation queries."""
+    """Rule rewriting and candidate-based physical planning for SliceGX queries."""
 
-    def plan(self, query: Any, test_nodes: List[int], cache_stats: Dict[str, int]) -> QueryPlan:
-        logical = self._build_logical_plan(query)
-        physical = self._build_physical_plan(query, test_nodes, cache_stats, logical)
+    def __init__(
+        self,
+        layer_count: int = 3,
+        quality_profile: Optional[ApproximationQualityProfile] = None,
+    ):
+        self.layer_count = layer_count
+        self.rewriter = LogicalRewriter()
+        self.cost_model = ExplanationCostModel()
+        self.quality_profile = quality_profile or ApproximationQualityProfile()
+        self.execution_profiles: Dict[str, Dict[str, float]] = {}
+
+    def plan(self, query: Any, test_nodes: List[int], cache_stats: Dict[str, Any]) -> QueryPlan:
+        sample_ratio, quality = self.resolve_sample_ratio(query)
+        logical = self._build_logical_plan(query, cache_stats)
+        candidates = self.cost_model.enumerate(
+            query,
+            len(test_nodes),
+            self.layer_count,
+            sample_ratio,
+            cache_stats,
+        )
+        selected = self.cost_model.choose(candidates)
+        profile = self.execution_profiles.get(selected.algorithm, {})
+        seconds_per_cost_unit = profile.get("seconds_per_cost_unit", 1.0)
+        estimated_seconds = selected.estimated_cost * seconds_per_cost_unit
+        if query.time_budget_seconds is not None and estimated_seconds > query.time_budget_seconds:
+            if query.max_error is None and query.min_confidence is None and query.approximate:
+                budget_ratio = max(
+                    0.05,
+                    sample_ratio * query.time_budget_seconds / max(estimated_seconds, 1e-9),
+                )
+                sample_ratio = budget_ratio
+                candidates = self.cost_model.enumerate(
+                    query,
+                    len(test_nodes),
+                    self.layer_count,
+                    sample_ratio,
+                    cache_stats,
+                )
+                selected = self.cost_model.choose(candidates)
+                profile = self.execution_profiles.get(selected.algorithm, {})
+                estimated_seconds = selected.estimated_cost * profile.get("seconds_per_cost_unit", 1.0)
+            else:
+                quality["budget_feasible"] = False
+        quality["estimated_seconds"] = round(estimated_seconds, 6)
+        quality["cost_calibration_observations"] = int(profile.get("observations", 0))
+        physical = self._physical_plan(selected, candidates, sample_ratio, quality)
         stats = {
             "target_count": len(test_nodes),
             "has_constraints": bool(query.include_nodes or query.exclude_nodes),
             "cache_entries": dict(cache_stats),
+            "candidate_count": len(candidates),
         }
         return QueryPlan(logical=logical, physical=physical, stats=stats)
 
-    def _build_logical_plan(self, query: Any) -> LogicalPlan:
+    def record_execution(self, algorithm: str, estimated_cost: float, elapsed_seconds: float) -> None:
+        if estimated_cost <= 0 or elapsed_seconds < 0:
+            return
+        observed_ratio = elapsed_seconds / estimated_cost
+        profile = self.execution_profiles.setdefault(
+            algorithm,
+            {"seconds_per_cost_unit": observed_ratio, "observations": 0},
+        )
+        if profile["observations"] == 0:
+            profile["seconds_per_cost_unit"] = observed_ratio
+        else:
+            profile["seconds_per_cost_unit"] = (
+                0.8 * profile["seconds_per_cost_unit"] + 0.2 * observed_ratio
+            )
+        profile["observations"] += 1
+
+    def _build_logical_plan(self, query: Any, cache_context: Dict[str, Any]) -> LogicalPlan:
         target_op = {
             "node": "TargetNodeLookup",
             "all": "TargetTestSetScan",
             "class": "TargetClassScan",
         }.get(query.target, "TargetUnknown")
-
-        filter_ops = []
+        filters = []
         if query.require_factual is not None:
-            filter_ops.append("FilterFactual")
+            filters.append("FilterFactual")
         if query.require_counterfactual is not None:
-            filter_ops.append("FilterCounterfactual")
+            filters.append("FilterCounterfactual")
         if query.fid_plus_threshold is not None:
-            filter_ops.append("FilterFidelityPlus")
+            filters.append("FilterFidelityPlus")
         if query.fid_minus_threshold is not None:
-            filter_ops.append("FilterFidelityMinus")
+            filters.append("FilterFidelityMinus")
         if query.max_subgraph_size is not None:
-            filter_ops.append("FilterSubgraphSize")
+            filters.append("FilterSubgraphSize")
+
+        operators = [target_op]
         if query.include_nodes:
-            filter_ops.append("ForceIncludeNodes")
+            operators.append("ForceIncludeNodes")
         if query.exclude_nodes:
-            filter_ops.append("ForceExcludeNodes")
+            operators.append("ForceExcludeNodes")
+        operators.append("Explain")
+        operators.extend(filters)
+        if query.rank_by:
+            operators.append(f"Rank[{query.rank_by}]")
+        if query.compare_by:
+            operators.append(f"Compare[{query.compare_by}]")
+        if query.pattern_min_support is not None:
+            operators.append(f"GroupPattern[{query.group_by},{query.pattern_min_support}]")
+        if query.project_fields:
+            operators.append("Project[" + ",".join(query.project_fields) + "]")
+        if query.materialize_as:
+            operators.append(f"Materialize[{query.materialize_as}]")
+        rewrite = self.rewriter.rewrite(operators, cache_context)
 
         compare_op = "none"
         if query.compare_by == "fidelity_plus":
             compare_op = "CompareBestFidelityPlus"
         elif query.compare_by == "common_nodes":
             compare_op = "CompareCommonNodes"
-
-        layer_scope = "all_layers" if query.layer == -1 else "single_layer"
         return LogicalPlan(
             target_op=target_op,
-            filter_ops=filter_ops,
+            filter_ops=filters,
             compare_op=compare_op,
-            layer_scope=layer_scope,
+            layer_scope="all_layers" if query.layer == -1 else "single_layer",
             approximate=query.approximate,
-        )
-
-    def _build_physical_plan(
-        self,
-        query: Any,
-        test_nodes: List[int],
-        cache_stats: Dict[str, int],
-        logical: LogicalPlan,
-    ) -> PhysicalPlan:
-        target_count = len(test_nodes)
-        sample_ratio = query.sample_ratio if query.approximate else 1.0
-        estimated_cost = self._estimate_cost(query, target_count, sample_ratio)
-        reasons: List[str] = []
-
-        if logical.layer_scope == "all_layers":
-            algorithm = "MM"
-            executor_op = "MultiLayerHopJumpPlan"
-            reasons.append("AT ALL LAYERS requires multi-layer execution.")
-        elif target_count > 1 or query.target in ("all", "class"):
-            algorithm = "MS"
-            executor_op = "MultiNodeSharedCandidatePlan"
-            reasons.append("Multiple target nodes benefit from shared-candidate execution.")
-        else:
-            algorithm = "SS"
-            executor_op = "SingleNodeExactPlan"
-            reasons.append("Single-node query maps to the single-start execution path.")
-
-        if query.approximate:
-            reasons.append(f"Approximate execution enabled with sample_ratio={sample_ratio}.")
-
-        if query.include_nodes or query.exclude_nodes:
-            reasons.append("Structural constraints disable greedy-state reuse for safety.")
-
-        if algorithm == "SS" and cache_stats.get("subfunction_entries", 0) > 0:
-            reasons.append("Existing cache entries may reduce repeated single-node query cost.")
-
-        cache_mode = "reuse_enabled"
-        if query.include_nodes or query.exclude_nodes:
-            cache_mode = "partial_reuse_only"
-        if algorithm in ("MS", "MM"):
-            cache_mode = "backend_managed"
-
-        return PhysicalPlan(
-            algorithm=algorithm,
-            executor_op=executor_op,
-            cache_mode=cache_mode,
-            sample_ratio=sample_ratio,
-            estimated_cost=estimated_cost,
-            reasons=reasons,
+            operators=rewrite.operators,
+            rewrite_rules=rewrite.applied_rules,
         )
 
     @staticmethod
-    def _estimate_cost(query: Any, target_count: int, sample_ratio: float) -> float:
-        layer_factor = 3.0 if query.layer == -1 else 1.0 + max(query.layer, 0) * 0.5
-        k_factor = float(query.K or 10)
-        constraint_factor = 1.25 if (query.include_nodes or query.exclude_nodes) else 1.0
-        compare_factor = 1.15 if query.compare_by else 1.0
-        approx_factor = max(sample_ratio, 0.1)
-        base = max(target_count, 1) * layer_factor * max(k_factor / 10.0, 0.5)
-        return round(base * constraint_factor * compare_factor * approx_factor, 3)
+    def _physical_plan(
+        selected: CandidatePlan,
+        candidates: List[CandidatePlan],
+        sample_ratio: float,
+        quality: Dict[str, Any],
+    ) -> PhysicalPlan:
+        reasons = [selected.reason]
+        if quality.get("quality_constrained"):
+            reasons.append(
+                "Sampling ratio was derived from MAX_ERROR/MIN_CONFIDENCE constraints; "
+                "the estimate must be calibrated empirically for each dataset."
+            )
+        if not quality.get("budget_feasible", True):
+            reasons.append("The requested time budget conflicts with the quality lower bound.")
+        return PhysicalPlan(
+            algorithm=selected.algorithm,
+            executor_op=selected.executor_op,
+            cache_mode=selected.cache_mode,
+            sample_ratio=sample_ratio,
+            estimated_cost=selected.estimated_cost,
+            reasons=reasons,
+            shared_scope=selected.shared_scope,
+            incremental=selected.incremental,
+            quality=quality,
+            candidates=[candidate.to_dict() for candidate in candidates],
+        )
+
+    def resolve_sample_ratio(self, query: Any):
+        if not query.approximate:
+            return 1.0, {
+                "quality_constrained": False,
+                "estimated_max_error": 0.0,
+                "estimated_confidence": 1.0,
+                "budget_feasible": True,
+            }
+        lower_bound = max(float(query.sample_ratio), 0.05)
+        calibrated_point = self.quality_profile.select(
+            query.max_error,
+            query.min_confidence,
+            minimum_ratio=lower_bound,
+        )
+        if calibrated_point is not None:
+            return calibrated_point.sample_ratio, {
+                "quality_constrained": query.max_error is not None or query.min_confidence is not None,
+                "requested_max_error": query.max_error,
+                "requested_min_confidence": query.min_confidence,
+                "estimated_max_error": calibrated_point.observed_max_error,
+                "estimated_confidence": calibrated_point.observed_confidence,
+                "time_budget_seconds": query.time_budget_seconds,
+                "budget_feasible": True,
+                "calibrated": True,
+                "quality_observations": calibrated_point.observations,
+            }
+        if query.max_error is not None:
+            lower_bound = max(lower_bound, 1.0 - float(query.max_error))
+        if query.min_confidence is not None:
+            lower_bound = max(lower_bound, float(query.min_confidence))
+        ratio = min(lower_bound, 1.0)
+        return ratio, {
+            "quality_constrained": query.max_error is not None or query.min_confidence is not None,
+            "requested_max_error": query.max_error,
+            "requested_min_confidence": query.min_confidence,
+            "estimated_max_error": round(1.0 - ratio, 6),
+            "estimated_confidence": round(ratio, 6),
+            "time_budget_seconds": query.time_budget_seconds,
+            "budget_feasible": True,
+            "calibrated": False,
+        }

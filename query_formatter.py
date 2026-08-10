@@ -23,6 +23,10 @@ def format_result(result: QueryExecutionResult) -> str:
                 f"layer_scope={logical.get('layer_scope', '?')} "
                 f"approximate={logical.get('approximate', False)}"
             )
+    if logical.get('operators'):
+        lines.append(f"Operators: {' -> '.join(logical['operators'])}")
+    if logical.get('rewrite_rules'):
+        lines.append(f"Rewrites: {logical['rewrite_rules']}")
     if physical:
         lines.append(
             f"Plan: {physical.get('executor_op', '?')} "
@@ -30,6 +34,20 @@ def format_result(result: QueryExecutionResult) -> str:
             f"cache={physical.get('cache_mode', '?')})"
         )
         reasons = physical.get('reasons', [])
+        lines.append(
+            f"Sharing: {physical.get('shared_scope', 'none')} "
+            f"incremental={physical.get('incremental', False)}"
+        )
+        if physical.get('quality'):
+            lines.append(f"Quality: {physical['quality']}")
+        if physical.get('candidates'):
+            lines.append("Candidates:")
+            for candidate in physical['candidates']:
+                lines.append(
+                    f"  - {candidate.get('executor_op')} "
+                    f"algorithm={candidate.get('algorithm')} "
+                    f"cost={candidate.get('estimated_cost')}"
+                )
         if reasons:
             lines.append("Reasons:")
             for reason in reasons:
@@ -72,6 +90,24 @@ def format_result(result: QueryExecutionResult) -> str:
 
     if result.filtered_results > 10:
         lines.append(f"\n  ... and {result.filtered_results - 10} more results")
+
+    if result.analytics.get("projection"):
+        projection = result.analytics["projection"]
+        lines.append(f"\n--- Projection {projection.get('fields', [])} ---")
+        for row in projection.get("rows", [])[:10]:
+            lines.append(f"  {row}")
+
+    if result.analytics.get("patterns"):
+        patterns = result.analytics["patterns"]
+        lines.append(f"\n--- Patterns (group_by={patterns.get('group_by')}) ---")
+        for pattern in patterns.get("items", [])[:10]:
+            lines.append(
+                f"  nodes={pattern.get('nodes')} support={pattern.get('support'):.4f} "
+                f"group={pattern.get('group_key')}"
+            )
+
+    if result.materialized_as:
+        lines.append(f"\nMaterialized as: {result.materialized_as}")
 
     return '\n'.join(lines)
 

@@ -32,6 +32,29 @@ class QueryParserTest(unittest.TestCase):
         self.assertTrue(query.require_factual)
         self.assertEqual(query.rank_by, "fidelity_plus")
 
+    def test_parse_result_algebra_and_quality_constraints(self):
+        query = self.parser.parse(
+            "EXPLAIN ALL WHERE FACTUAL = TRUE AND FIDELITY_PLUS > 0.6 "
+            "GROUP BY LAYER PATTERN MIN_SUPPORT 0.5 "
+            "PROJECT NODE_ID,LAYER,FIDELITY_PLUS MATERIALIZE AS Q1 "
+            "WITH MAX_ERROR 0.1 WITH MIN_CONFIDENCE 0.9 WITH TIME_BUDGET 10"
+        )
+        self.assertTrue(query.require_factual)
+        self.assertEqual(query.fid_plus_threshold, 0.6)
+        self.assertEqual(query.group_by, "layer")
+        self.assertEqual(query.pattern_min_support, 0.5)
+        self.assertEqual(query.project_fields, ["node_id", "layer", "fidelity_plus"])
+        self.assertEqual(query.materialize_as, "Q1")
+        self.assertEqual(query.max_error, 0.1)
+        self.assertEqual(query.min_confidence, 0.9)
+        self.assertEqual(query.time_budget_seconds, 10.0)
+
+    def test_rejects_unknown_tokens_and_wrong_comparators(self):
+        with self.assertRaises(ValueError):
+            self.parser.parse("EXPLAIN NODE 519 UNKNOWN")
+        with self.assertRaises(ValueError):
+            self.parser.parse("EXPLAIN NODE 519 WHERE FIDELITY_PLUS < 0.5")
+
 
 if __name__ == "__main__":
     unittest.main()

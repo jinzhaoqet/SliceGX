@@ -1,13 +1,17 @@
 import time
+import copy
 from collections import Counter
 from typing import Any, Dict, List
 
 import torch
 
 from SliceGX import Slicedmodel, Subfunction, Declarative, GreedyAlgorithm
+from analytics.algebra import AlgebraExecutor, GroupPattern, Project
+from analytics.data_model import ExplanationSet
 from planner.optimizer import QueryOptimizer
 from query_validator import QueryValidator
-from result_schema import ComparisonSummary, ExplanationResult, QueryExecutionResult
+from result_operations import ResultOperations
+from result_schema import ExplanationResult, QueryExecutionResult
 
 
 class ResultCache:
@@ -17,6 +21,8 @@ class ResultCache:
         self._sf_cache: Dict[tuple, Any] = {}
         self._exp_cache: Dict[tuple, list] = {}
         self._slice_cache: Dict[tuple, Any] = {}
+        self._generation_cache: Dict[tuple, List[dict]] = {}
+        self._materialized_results: Dict[str, QueryExecutionResult] = {}
 
     def get_subfunction(self, layer, h, theta, sample_ratio):
         return self._sf_cache.get((layer, h, theta, sample_ratio))
@@ -43,11 +49,63 @@ class ResultCache:
     def save_explanatory(self, node, layer, h, theta, K, explanatory):
         self._exp_cache[(node, layer, h, theta, K)] = list(explanatory)
 
+    @staticmethod
+    def generation_key(query, test_nodes):
+        return (
+            tuple(test_nodes),
+            query.layer,
+            query.K,
+            query.h,
+            query.theta,
+            query.gamma,
+            tuple(query.include_nodes),
+            tuple(query.exclude_nodes),
+            query.sample_ratio if query.approximate else 1.0,
+        )
+
+    def get_generation(self, key):
+        value = self._generation_cache.get(key)
+        return copy.deepcopy(value) if value is not None else None
+
+    def save_generation(self, key, results):
+        self._generation_cache[key] = copy.deepcopy(results)
+
+    def inspect(self, query, test_nodes):
+        key = self.generation_key(query, test_nodes)
+        cut_layer = max(query.layer, 0)
+        resumable_nodes = 0
+        for node in test_nodes:
+            for cache_key in self._exp_cache:
+                cached_node, layer, h, theta, cached_k = cache_key
+                if (
+                    cached_node == node
+                    and layer == cut_layer
+                    and h == query.h
+                    and theta == query.theta
+                    and cached_k < query.K
+                ):
+                    resumable_nodes += 1
+                    break
+        return {
+            "exact_generation_hit": key in self._generation_cache,
+            "resumable_nodes": resumable_nodes,
+            "generation_key": key,
+        }
+
+    def save_materialized_result(self, name, result):
+        self._materialized_results[name.upper()] = copy.deepcopy(result)
+
+    def get_materialized_result(self, name):
+        value = self._materialized_results.get(name.upper())
+        return copy.deepcopy(value) if value is not None else None
+
     def stats(self):
         return {
             'subfunction_entries': len(self._sf_cache),
             'explanatory_entries': len(self._exp_cache),
             'modelslice_entries': len(self._slice_cache),
+            'generation_entries': len(self._generation_cache),
+            'materialized_entries': len(self._materialized_results),
         }
 
 
@@ -60,16 +118,19 @@ class SliceGXExecutor:
         self.state_dict = state_dict
         self.device = device
         self.logger = logger
-        self.cache = ResultCache()
-        self.optimizer = QueryOptimizer()
-        self.validator = QueryValidator()
         self.layer_nums = len(config.models.param.gnn_latent_dim)
+        self.cache = ResultCache()
+        self.optimizer = QueryOptimizer(layer_count=self.layer_nums)
+        self.validator = QueryValidator()
+        self.algebra = AlgebraExecutor()
 
     def execute(self, query) -> QueryExecutionResult:
         start_time = time.time()
 
         self.validator.validate(query)
         self._fill_defaults(query)
+        if query.approximate:
+            query.sample_ratio = self.optimizer.resolve_sample_ratio(query)[0]
 
         test_nodes = self._resolve_nodes(query)
         if not test_nodes:
@@ -85,8 +146,12 @@ class SliceGXExecutor:
                 error=f'No test nodes found for target={query.target}',
             )
 
-        plan = self.optimizer.plan(query, test_nodes, self.cache.stats())
+        cache_context = self.cache.stats()
+        cache_context.update(self.cache.inspect(query, test_nodes))
+        plan = self.optimizer.plan(query, test_nodes, cache_context)
         query.algorithm = plan.physical.algorithm
+        if query.approximate:
+            query.sample_ratio = plan.physical.sample_ratio
         self.logger.info(
             f'[Planner] algorithm={query.algorithm}, nodes={len(test_nodes)}, '
             f'layer={query.layer}, cost={plan.physical.estimated_cost}'
@@ -110,21 +175,30 @@ class SliceGXExecutor:
                 plan_only=True,
             )
 
-        if query.algorithm == 'SS':
+        generation_key = self.cache.generation_key(query, test_nodes)
+        if query.algorithm == 'CACHE':
+            raw_results = self.cache.get_generation(generation_key) or []
+        elif query.algorithm == 'SS':
             raw_results = self._run_ss(query, test_nodes)
+        elif query.algorithm == 'SS_LAYERED':
+            raw_results = self._run_ss_layered(query, test_nodes)
         elif query.algorithm == 'MS':
             raw_results = self._run_ms(query, test_nodes)
         else:
             raw_results = self._run_mm(query, test_nodes)
+        if query.algorithm != 'CACHE':
+            self.cache.save_generation(generation_key, raw_results)
 
         filtered = self._apply_filters(raw_results, query)
         ranked = self._rank(filtered, query.rank_by) if query.rank_by and filtered else filtered
         compared = self._compare(ranked, query.compare_by) if query.compare_by and ranked else None
 
         elapsed = time.time() - start_time
+        if query.algorithm != 'CACHE':
+            self.optimizer.record_execution(query.algorithm, plan.physical.estimated_cost, elapsed)
         self.logger.info(f'[Done] {len(ranked)}/{len(raw_results)} results passed filters, time={elapsed:.3f}s')
 
-        return QueryExecutionResult(
+        result = QueryExecutionResult(
             query=self._query_summary(query),
             algorithm=query.algorithm,
             plan=plan.to_dict(),
@@ -135,81 +209,27 @@ class SliceGXExecutor:
             time_seconds=round(elapsed, 3),
             cache_stats=self.cache.stats(),
             plan_only=False,
+            analytics=self._derive_analytics(ranked, query),
+            materialized_as=query.materialize_as.upper() if query.materialize_as else None,
         )
+        if query.materialize_as:
+            self.cache.save_materialized_result(query.materialize_as, result)
+        return result
 
     @staticmethod
     def compare_saved_result(saved_result: QueryExecutionResult, compare_by: str, source_name: str) -> QueryExecutionResult:
         """Run comparison operators over a previously materialized result set."""
-        raw_results = [item.to_dict() for item in saved_result.results]
-        compared = SliceGXExecutor._compare(raw_results, compare_by) if raw_results else None
-        return QueryExecutionResult(
-            query={
-                "target": "saved_result",
-                "source_name": source_name,
-                "compare_by": compare_by,
-                "plan_only": False,
-            },
-            algorithm=saved_result.algorithm,
-            plan=saved_result.plan,
-            total_results=saved_result.total_results,
-            filtered_results=saved_result.filtered_results,
-            results=list(saved_result.results),
-            comparison=ComparisonSummary.from_raw(compared) if compared else None,
-            time_seconds=0.0,
-            cache_stats=dict(saved_result.cache_stats),
-            plan_only=False,
-        )
+        return ResultOperations.compare(saved_result, compare_by, source_name)
 
     @staticmethod
     def filter_saved_result(saved_result: QueryExecutionResult, filter_query, source_name: str) -> QueryExecutionResult:
         """Apply WHERE-style filters over a previously materialized result set."""
-        raw_results = [item.raw if item.raw else item.to_dict() for item in saved_result.results]
-        filtered = SliceGXExecutor._apply_filters(raw_results, filter_query)
-        return QueryExecutionResult(
-            query={
-                "target": "saved_result",
-                "source_name": source_name,
-                "filter_applied": {
-                    "require_factual": filter_query.require_factual,
-                    "require_counterfactual": filter_query.require_counterfactual,
-                    "fid_plus_threshold": filter_query.fid_plus_threshold,
-                    "fid_minus_threshold": filter_query.fid_minus_threshold,
-                },
-                "plan_only": False,
-            },
-            algorithm=saved_result.algorithm,
-            plan=saved_result.plan,
-            total_results=saved_result.filtered_results,
-            filtered_results=len(filtered),
-            results=[ExplanationResult.from_raw(item) for item in filtered],
-            comparison=None,
-            time_seconds=0.0,
-            cache_stats=dict(saved_result.cache_stats),
-            plan_only=False,
-        )
+        return ResultOperations.filter(saved_result, filter_query, source_name)
 
     @staticmethod
     def rank_saved_result(saved_result: QueryExecutionResult, rank_by: str, source_name: str) -> QueryExecutionResult:
         """Rank a previously materialized result set by a supported metric."""
-        metric = rank_by.lower()
-        sorted_results = SliceGXExecutor._rank(list(saved_result.results), metric)
-        return QueryExecutionResult(
-            query={
-                "target": "saved_result",
-                "source_name": source_name,
-                "rank_by": metric,
-                "plan_only": False,
-            },
-            algorithm=saved_result.algorithm,
-            plan=saved_result.plan,
-            total_results=saved_result.filtered_results,
-            filtered_results=len(sorted_results),
-            results=sorted_results,
-            comparison=None,
-            time_seconds=0.0,
-            cache_stats=dict(saved_result.cache_stats),
-            plan_only=False,
-        )
+        return ResultOperations.rank(saved_result, rank_by, source_name)
 
     def _resolve_nodes(self, query) -> List[int]:
         data = self.dataset.data
@@ -295,6 +315,7 @@ class SliceGXExecutor:
 
             if optimal is not None:
                 optimal['node_id'] = node
+                optimal['layer'] = cut_layer
                 results.append(optimal)
 
         return results
@@ -307,7 +328,14 @@ class SliceGXExecutor:
 
         dec = DecMS(self.config, self.dataset, query.K, query.theta, query.h, query.gamma)
         modelslice = SliceMS(self.config, self.device, num_hop, self.logger, self.dataset, self.state_dict)
-        quality = SubMS(test_nodes, dec, modelslice, self.logger, self.device)
+        quality = SubMS(
+            test_nodes,
+            dec,
+            modelslice,
+            self.logger,
+            self.device,
+            sample_ratio=query.sample_ratio if query.approximate else 1.0,
+        )
 
         self.dataset.data.to(self.device)
         algorithm = GreedyMS(dec, modelslice, test_nodes, self.logger, quality)
@@ -317,6 +345,7 @@ class SliceGXExecutor:
         for i, opt in enumerate(optimal_list):
             if opt is not None:
                 opt['node_id'] = test_nodes[i] if i < len(test_nodes) else -1
+                opt['layer'] = cut_layer
                 results.append(opt)
         return results
 
@@ -325,7 +354,14 @@ class SliceGXExecutor:
 
         dec = DecMM(self.config, self.dataset, query.K, query.theta, query.h, query.gamma)
         modelslice = SliceMM(self.config, self.device, self.layer_nums, self.logger, self.dataset, self.state_dict)
-        quality = SubMM(test_nodes, dec, modelslice, self.logger, self.device)
+        quality = SubMM(
+            test_nodes,
+            dec,
+            modelslice,
+            self.logger,
+            self.device,
+            sample_ratio=query.sample_ratio if query.approximate else 1.0,
+        )
 
         self.dataset.data.to(self.device)
         algorithm = GreedyMM(dec, modelslice, test_nodes, self.logger, quality)
@@ -340,17 +376,33 @@ class SliceGXExecutor:
                     results.append(opt)
         return results
 
+    def _run_ss_layered(self, query, test_nodes: List[int]) -> List[dict]:
+        original_layer = query.layer
+        results = []
+        try:
+            for layer in range(self.layer_nums):
+                query.layer = layer
+                layer_results = self._run_ss(query, test_nodes)
+                for result in layer_results:
+                    result['layer'] = layer
+                results.extend(layer_results)
+        finally:
+            query.layer = original_layer
+        return results
+
     @staticmethod
     def _apply_filters(results: List[dict], query) -> List[dict]:
         filtered = []
         for r in results:
-            if query.require_factual is not None and r.get('factual') != query.require_factual:
+            if getattr(query, 'require_factual', None) is not None and r.get('factual') != query.require_factual:
                 continue
-            if query.require_counterfactual is not None and r.get('counterfactual') != query.require_counterfactual:
+            if getattr(query, 'require_counterfactual', None) is not None and r.get('counterfactual') != query.require_counterfactual:
                 continue
-            if query.fid_plus_threshold is not None and r.get('Fid+', -999) <= query.fid_plus_threshold:
+            if getattr(query, 'fid_plus_threshold', None) is not None and r.get('Fid+', r.get('fidelity_plus', -999)) <= query.fid_plus_threshold:
                 continue
-            if query.fid_minus_threshold is not None and r.get('Fid-', 999) >= query.fid_minus_threshold:
+            if getattr(query, 'fid_minus_threshold', None) is not None and r.get('Fid-', r.get('fidelity_minus', 999)) >= query.fid_minus_threshold:
+                continue
+            if getattr(query, 'max_subgraph_size', None) is not None and len(r.get('nodes', [])) > query.max_subgraph_size:
                 continue
             filtered.append(r)
         return filtered
@@ -368,7 +420,7 @@ class SliceGXExecutor:
         if compare_by == 'common_nodes':
             cnt = Counter()
             for r in results:
-                cnt.update(r.get('nodes', []))
+                cnt.update(set(r.get('nodes', [])))
             n = len(results)
             common = [node for node, c in cnt.most_common() if c >= 0.5 * n]
             return {
@@ -408,4 +460,48 @@ class SliceGXExecutor:
             'approximate': query.approximate,
             'sample_ratio': query.sample_ratio if query.approximate else 1.0,
             'plan_only': query.plan_only,
+            'project_fields': list(query.project_fields),
+            'group_by': query.group_by,
+            'pattern_min_support': query.pattern_min_support,
+            'materialize_as': query.materialize_as,
+            'max_error': query.max_error,
+            'min_confidence': query.min_confidence,
+            'time_budget_seconds': query.time_budget_seconds,
         }
+
+    def _derive_analytics(self, ranked_results, query) -> Dict[str, Any]:
+        if not query.project_fields and query.pattern_min_support is None:
+            return {}
+        typed_results = [ExplanationResult.from_raw(item) if isinstance(item, dict) else item for item in ranked_results]
+        explanation_set = ExplanationSet.from_results(
+            typed_results,
+            set_id=query.materialize_as or "query-result",
+            graph_id=str(self.config.datasets.dataset_name),
+            model_id=str(self.config.models.gnn_name),
+        )
+        analytics: Dict[str, Any] = {}
+        if query.project_fields:
+            projected = self.algebra.execute(explanation_set, Project(tuple(query.project_fields)))
+            analytics["projection"] = {
+                "fields": list(projected.fields),
+                "rows": projected.rows,
+            }
+        if query.pattern_min_support is not None:
+            pattern_set = self.algebra.execute(
+                explanation_set,
+                GroupPattern(group_by=query.group_by, min_support=query.pattern_min_support),
+            )
+            analytics["patterns"] = {
+                "group_by": pattern_set.group_by,
+                "items": [
+                    {
+                        "pattern_id": pattern.pattern_id,
+                        "nodes": list(pattern.nodes),
+                        "support": pattern.support,
+                        "source_explanation_ids": list(pattern.source_explanation_ids),
+                        "group_key": pattern.group_key,
+                    }
+                    for pattern in pattern_set.patterns
+                ],
+            }
+        return analytics

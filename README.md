@@ -74,3 +74,7 @@ This repository contains the source code for our paper: SliceGX: Layer-wise GNN 
 ## Citation
 
 > Cibo Yu, Tingting Zhu, Tingyang Chen, Yinghui Wu, Arijit Khan, and Xiangyu Ke. 2026. **SliceGX: Layer-wise GNN Explanation with Model-slicing**. In Proceedings of the ACM Web Conference 2026 (WWW ’26), April 13–17, 2026, Dubai, United Arab Emirates. ACM, New York, NY, USA, 12 pages. https://doi.org/10.1145/3774904.3792689
+
+## TKDE System Extension
+
+The repository now includes a formal explanation data model, typed result algebra, optimizer-backed execution, an explanation analytics benchmark, and provider-neutral `NL2Query`/grounded `Result2NL` pipelines. The unified architecture, implementation examples, usage, evaluation plan, and reviewer-response guidance are documented in [docs/TKDE扩展统一设计与实现.md](docs/TKDE扩展统一设计与实现.md).
